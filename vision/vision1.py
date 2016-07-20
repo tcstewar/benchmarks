@@ -12,7 +12,7 @@ def load_images(dir, items=None, length=90*14, count=None):
     for fn in os.listdir(dir):
         if fn[-4:] == '.png':
             if items is None or fn[:-4] in items:
-                names.append(fn[:-4])                      
+                names.append(fn[:-4])
 
     if count is not None:
         names = names[:count]
@@ -25,7 +25,7 @@ def load_images(dir, items=None, length=90*14, count=None):
             image_2d /= 255
             image_1d = image_2d.reshape(1,length)
             images[i] = image_1d
-    
+
     return names, 2*images - 1  # normalize to -1 to 1
 
 def generate_vectors(items, vocab):
@@ -39,7 +39,7 @@ def display_func(t, x):
     import base64
     import PIL.Image
     import cStringIO
-    
+
     input_shape = (1, 14, 90)
 
     values = x.reshape(input_shape)
@@ -69,31 +69,31 @@ class Vision(ctn_benchmark.Benchmark):
         self.default('number of V1 neurons', n_V1=80)
         self.default('number of inputs', n_input=2)
         self.default('dimensions', dimensions=32)
-        self.default('fixed input', fixed_input=True)
+        self.default('fixed input', fixed_input=False)
         self.default('display from neurons', neuron_display=False)
     def model(self, p):
         names, images = load_images('images', count=p.n_input)
-        
+
         model = nengo.Network()
         with model:
             rng = np.random.RandomState(p.seed)
             encoders = Gabor().generate(p.n_V1, (11, 11), rng=rng)
             encoders = Mask((14, 90)).populate(encoders, rng=rng, flatten=True)
-            
+
             V1 = nengo.Ensemble(p.n_V1, images.shape[1], eval_points=images,
                                 intercepts=nengo.dists.Choice([-0.5]),
                                 max_rates=nengo.dists.Choice([100]),
                                 encoders=encoders,
                                 label = 'V1')
-            
-            vocab = spa.Vocabulary(p.dimensions)                    
+
+            vocab = spa.Vocabulary(p.dimensions)
             AIT = spa.State(p.dimensions, label='AIT', vocab=vocab)
-            
+
             outputs = generate_vectors(names, vocab)
             f = nengo.utils.connection.target_function(images, outputs)
             visconn = nengo.Connection(V1, AIT.input, synapse=0.005,
                                         **f)
-            
+
             if p.fixed_input:
                 stim = nengo.Node(images[0], label='stim')
             else:
@@ -101,22 +101,34 @@ class Vision(ctn_benchmark.Benchmark):
                     return images[int(t/0.1) % len(images)]
                 stim = nengo.Node(stim_func, label='stim')
             nengo.Connection(stim, V1)
-        
-            
-            display_node = nengo.Node(display_func, size_in=V1.size_out, 
+
+
+            display_node = nengo.Node(display_func, size_in=V1.size_out,
                                         label='display_node')
             if p.neuron_display:
                 nengo.Connection(V1, display_node)
             else:
                 nengo.Connection(stim, display_node)
-            
-            
-                               
+
+            self.p = nengo.Probe(AIT.output, synapse=0.03)
+            self.vocab = vocab
+
+
+
         return model
+    def evaluate(self, p, sim, plot):
+        sim.run(0.5)
+
+        if plot is not None:
+            plot.plot(sim.trange(), np.dot(sim.data[self.p], self.vocab.vectors.T))
+        return {}
+
 
 if __name__ == "__builtin__":
-    model = Vision().make_model(fixed_input=True, 
+    model = Vision().make_model(fixed_input=True,
                                 neuron_display=False,
                                 dimensions=64,
                                 n_V1=80,
                                 n_input=5)
+elif __name__ == '__main__':
+    Vision().run()

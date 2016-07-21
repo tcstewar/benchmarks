@@ -51,6 +51,10 @@ class AssociationRecognition(ctn_benchmark.Benchmark):
         self.default('dimensions for low-level motor', Dlow=32)
         self.default('subject number', subject=0)
         self.default('hand to use', hand='RIGHT')
+        self.default('remove motor component', remove_motor=False)
+        self.default('remove bg component', remove_bg=False)
+        self.default('remove thal component', remove_thal=False)
+        self.default('remove cortical component', remove_cortical=False)
 
     #load stimuli, subj=0 means a subset of the stims of subject 1 (no long words), works well with lower dims
     def load_stims(self, subj=0):
@@ -359,81 +363,82 @@ class AssociationRecognition(ctn_benchmark.Benchmark):
             model.comparison = spa.Compare(p.D, vocab=self.vocab_concepts)
 
 
-            #motor
-            model.motor_net = nengo.Network()
-            with model.motor_net:
+            if not p.remove_motor:
+                #motor
+                model.motor_net = nengo.Network()
+                with model.motor_net:
 
-                #input multiplier
-                model.motor_input = spa.State(p.Dmid,vocab=self.vocab_motor)
+                    #input multiplier
+                    model.motor_input = spa.State(p.Dmid,vocab=self.vocab_motor)
 
-                #higher motor area (SMA?)
-                model.motor = spa.State(p.Dmid, vocab=self.vocab_motor,feedback=1)
+                    #higher motor area (SMA?)
+                    model.motor = spa.State(p.Dmid, vocab=self.vocab_motor,feedback=1)
 
-                #connect input multiplier with higher motor area
-                nengo.Connection(model.motor_input.output,model.motor.input,synapse=.1,transform=10)
+                    #connect input multiplier with higher motor area
+                    nengo.Connection(model.motor_input.output,model.motor.input,synapse=.1,transform=10)
 
-                #finger area
-                model.fingers = spa.AssociativeMemory(self.vocab_fingers, input_keys=['L1', 'L2', 'R1', 'R2'], wta_output=True)
+                    #finger area
+                    model.fingers = spa.AssociativeMemory(self.vocab_fingers, input_keys=['L1', 'L2', 'R1', 'R2'], wta_output=True)
 
-                #conncetion between higher order area (hand, finger), to lower area
-                nengo.Connection(model.motor.output, model.fingers.input, transform=.4*self.motor_mapping)
+                    #conncetion between higher order area (hand, finger), to lower area
+                    nengo.Connection(model.motor.output, model.fingers.input, transform=.4*self.motor_mapping)
 
-                #finger position (spinal?)
-                model.finger_pos = nengo.networks.EnsembleArray(n_neurons=50, n_ensembles=4)
-                nengo.Connection(model.finger_pos.output, model.finger_pos.input, synapse=0.1, transform=0.3) #feedback
+                    #finger position (spinal?)
+                    model.finger_pos = nengo.networks.EnsembleArray(n_neurons=50, n_ensembles=4)
+                    nengo.Connection(model.finger_pos.output, model.finger_pos.input, synapse=0.1, transform=0.3) #feedback
 
-                #connection between finger area and finger position
-                nengo.Connection(model.fingers.am.elem_output, model.finger_pos.input, transform=np.diag([0.55, .53, .57, .55])) #fix these
-
-
-
-
-            model.bg = spa.BasalGanglia(
-                spa.Actions(
-                    'dot(goal,DO_TASK)-.5 --> dm_learned_words=vis_pair, goal=RECOG, attend=ITEM1',
-                    'dot(goal,RECOG)+dot(attend,ITEM1)+familiarity-2 --> goal=RECOG2, dm_learned_words=vis_pair, attend=ITEM2',#'vis_pair=ITEM1*concepts',
-                    'dot(goal,RECOG)+dot(attend,ITEM1)+(1-familiarity)-2 --> goal=RECOG2, attend=ITEM2', #motor_input=1.5*target_hand+MIDDLE,
-                    'dot(goal,RECOG2)+dot(attend,ITEM2)+familiarity-1.3 --> goal=RECOLLECTION,dm_pairs = 2*vis_pair, representation=3*dm_pairs',# vis_pair=ITEM2*concepts',
-                    'dot(goal,RECOG2)+dot(attend,ITEM2)+(1-familiarity)-1.3 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE',
-                    'dot(goal,RECOLLECTION) - .5 --> goal=RECOLLECTION, representation=2*dm_pairs',
-                    'dot(goal,RECOLLECTION) + 2*rep_filled - 1.3 --> goal=COMPARE_ITEM1, attend=ITEM1, comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-                    'dot(goal,COMPARE_ITEM1) + rep_filled + comparison -1 --> goal=COMPARE_ITEM2, attend=ITEM2, comparison_A = 2*vis_pair',#comparison_B = 2*representation*~attend',
-                    'dot(goal,COMPARE_ITEM1) + rep_filled + (1-comparison) -1 --> goal=RESPOND,motor_input=1.0*target_hand+MIDDLE',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-                    'dot(goal,COMPARE_ITEM2) + rep_filled + comparison - 1 --> goal=RESPOND,motor_input=1.0*target_hand+INDEX',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-                    'dot(goal,COMPARE_ITEM2) + rep_filled + (1-comparison) -1 --> goal=RESPOND,motor_input=1.0*target_hand+MIDDLE',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-
-                    'dot(goal,RESPOND) + comparison - 1 --> goal=RESPOND, motor_input=1.0*target_hand+INDEX', #comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-                    'dot(goal,RESPOND) + (1-comparison) - 1 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE', #comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
-
-                    # 'dot(goal,RECOLLECTION) + (1 - dot(representation,vis_pair)) - 1.3 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE',
-                    'dot(goal,RESPOND)+dot(motor,MIDDLE+INDEX)-1.0 --> goal=END',
-                    'dot(goal,END) --> goal=END',
-                    #'.6 -->',
-
-                    #possible to match complete buffer, ie is representation filled?
-
-                ))
-            model.thalamus = spa.Thalamus(model.bg)
-
-            model.cortical = spa.Cortical( # cortical connection: shorthand for doing everything with states and connections
-                spa.Actions(
-                  #  'motor_input = .04*target_hand',
-                    #'dm_learned_words = .8*concepts', #.5
-                    #'dm_pairs = 2*stimulus'
-                    'vis_pair = 2*attend*concepts+concepts',
-                    'comparison_A = 2*vis_pair',
-                    'comparison_B = 2*representation*~attend',
-
-                ))
+                    #connection between finger area and finger position
+                    nengo.Connection(model.fingers.am.elem_output, model.finger_pos.input, transform=np.diag([0.55, .53, .57, .55])) #fix these
 
 
-            #probes
-            #model.pr_goal = nengo.Probe(model.goal.output,synapse=.01)
-            self.pr_motor_pos = nengo.Probe(model.finger_pos.output,synapse=.01) #raw vector (dimensions x time)
-            self.pr_motor = nengo.Probe(model.fingers.output,synapse=.01)
-            self.pr_motor1 = nengo.Probe(model.motor.output, synapse=.01)
-            #model.pr_target = nengo.Probe(model.target_hand.output, synapse=.01)
-            #model.pr_attend = nengo.Probe(model.attend.output, synapse=.01)
+
+            if not p.remove_bg:
+
+                model.bg = spa.BasalGanglia(
+                    spa.Actions(
+                        'dot(goal,DO_TASK)-.5 --> dm_learned_words=vis_pair, goal=RECOG, attend=ITEM1',
+                        'dot(goal,RECOG)+dot(attend,ITEM1)+familiarity-2 --> goal=RECOG2, dm_learned_words=vis_pair, attend=ITEM2',#'vis_pair=ITEM1*concepts',
+                        'dot(goal,RECOG)+dot(attend,ITEM1)+(1-familiarity)-2 --> goal=RECOG2, attend=ITEM2', #motor_input=1.5*target_hand+MIDDLE,
+                        'dot(goal,RECOG2)+dot(attend,ITEM2)+familiarity-1.3 --> goal=RECOLLECTION,dm_pairs = 2*vis_pair, representation=3*dm_pairs',# vis_pair=ITEM2*concepts',
+                        'dot(goal,RECOG2)+dot(attend,ITEM2)+(1-familiarity)-1.3 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE',
+                        'dot(goal,RECOLLECTION) - .5 --> goal=RECOLLECTION, representation=2*dm_pairs',
+                        'dot(goal,RECOLLECTION) + 2*rep_filled - 1.3 --> goal=COMPARE_ITEM1, attend=ITEM1, comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+                        'dot(goal,COMPARE_ITEM1) + rep_filled + comparison -1 --> goal=COMPARE_ITEM2, attend=ITEM2, comparison_A = 2*vis_pair',#comparison_B = 2*representation*~attend',
+                        'dot(goal,COMPARE_ITEM1) + rep_filled + (1-comparison) -1 --> goal=RESPOND,motor_input=1.0*target_hand+MIDDLE',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+                        'dot(goal,COMPARE_ITEM2) + rep_filled + comparison - 1 --> goal=RESPOND,motor_input=1.0*target_hand+INDEX',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+                        'dot(goal,COMPARE_ITEM2) + rep_filled + (1-comparison) -1 --> goal=RESPOND,motor_input=1.0*target_hand+MIDDLE',#comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+
+                        'dot(goal,RESPOND) + comparison - 1 --> goal=RESPOND, motor_input=1.0*target_hand+INDEX', #comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+                        'dot(goal,RESPOND) + (1-comparison) - 1 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE', #comparison_A = 2*vis_pair,comparison_B = 2*representation*~attend',
+
+                        # 'dot(goal,RECOLLECTION) + (1 - dot(representation,vis_pair)) - 1.3 --> goal=RESPOND, motor_input=1.0*target_hand+MIDDLE',
+                        'dot(goal,RESPOND)+dot(motor,MIDDLE+INDEX)-1.0 --> goal=END',
+                        'dot(goal,END) --> goal=END',
+                        #'.6 -->',
+
+                        #possible to match complete buffer, ie is representation filled?
+
+                    ))
+                if not p.remove_thal:
+                    model.thalamus = spa.Thalamus(model.bg)
+
+            if not p.remove_cortical:
+                model.cortical = spa.Cortical( # cortical connection: shorthand for doing everything with states and connections
+                    spa.Actions(
+                      #  'motor_input = .04*target_hand',
+                        #'dm_learned_words = .8*concepts', #.5
+                        #'dm_pairs = 2*stimulus'
+                        'vis_pair = 2*attend*concepts+concepts',
+                        'comparison_A = 2*vis_pair',
+                        'comparison_B = 2*representation*~attend',
+
+                    ))
+
+
+            if not p.remove_motor:
+                self.pr_motor_pos = nengo.Probe(model.finger_pos.output,synapse=.01) #raw vector (dimensions x time)
+                self.pr_motor = nengo.Probe(model.fingers.output,synapse=.01)
+                self.pr_motor1 = nengo.Probe(model.motor.output, synapse=.01)
 
             #input
             model.input = spa.Input(goal=lambda t: 'DO_TASK' if t < 0.05 else '0',
